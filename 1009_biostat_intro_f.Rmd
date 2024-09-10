@@ -1,0 +1,126 @@
+Загружаем необходимые библиотеки.
+
+```{r necessary_libraries, echo=FALSE}
+library(tibble)
+library(dplyr)
+library(sys)
+```
+
+---
+title: "Learning basics for a biostatistics course"
+author: "Ekaterina Vostokova"
+output: 
+  word_document
+---
+
+## R Markdown в целом, создание чанков
+
+RMarkdown позволяет соединить текст, визуализации и код, который будет генерировать код и даже текст в отдельных случаях..Rmd файл — это просто текстовый файл с указанным расширением. Но, в отличие от просто .R файла он содержит в себе чанки, позволяющие организовывать код удобным способом. 
+
+Для создания чанка - добавить ```{r} в начале чанка и закрывающих ```
+
+Настройки чанка. Например, показывать ли код при печати документа (echo = TRUE), выполнять ли код в чанке (eval = TRUE).
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval=TRUE)
+```
+
+## Пример анализа данных (датасет с медицинскими данными)
+
+
+Открываем нужный файл с помощью tibble
+
+```{r open_file, echo=FALSE}
+
+data <- as_tibble(readRDS("/Users/ekaterinavostokova/Downloads/numeric_data.rds"))
+```
+
+```{r glimpse, echo=FALSE}
+data %>%
+  glimpse()
+```
+Добавляем новый столбец:
+
+```{r add_column, echo=FALSE}
+data %>%
+  add_column(column_name = 1:100, .before = NULL, .after = NULL)
+```
+
+Склеивание двух и более таблиц в одну
+```{r merge, echo=FALSE}
+data_1 <- tibble(var_1 = 1:10, var_2 = rep(c("Группа 1", "Группа 2"), 5))
+data_2 <- tibble(var_2 = rbeta(10, 1, 5), var_3 = rnorm(10))
+data_3 <- tibble(var_4 = 100:91, var_5 = rep(c("Молодые", "Средний возраст"), 5))
+data_1 %>% bind_cols(data_2) %>% bind_cols(data_3)
+```
+
+
+Select - выбираем переменные. Если имя содержит кириллические символы, пробелы и пунтуацию - оформляем имена в апострофы. 
+Здесь выбираем только количественные переменные.
+```{r select, echo=FALSE}
+data %>%
+  select(`Возраст`, `Рост`)
+```
+Группировка - например, по столбцу возраста.
+```{r groupby, echo=FALSE}
+data %>% group_by(`Возраст`)
+
+```
+
+Выбираем первые десять строк.
+```{r slice, echo=FALSE}
+data %>% slice(1:10)
+
+```
+
+Фильтр - например, чтобы возраст был меньше 30 и рост больше 170.
+
+```{r filter, echo=FALSE}
+data %>% filter(`Возраст` < 30 & `Рост` > 170)
+
+```
+
+
+С помощью mutate можно изменять переменные и создавать новые.
+
+```{r mutate, echo=FALSE}
+data %>%
+  mutate(`Базофилы_выше_0.5` = ifelse(`Базофилы_E1` > 0.5, "Высокие", "Низкие")) %>%
+  select(`Базофилы_выше_0.5`, everything()) %>%
+  arrange(`Базофилы_выше_0.5`)
+    
+```
+
+Можно простым способом переименовать переменные.
+
+```{r rename, echo=FALSE}
+data %>%
+  rename(`Эритроциты визит 1` = `Эритроциты_E1`, `Эритроциты визит 2` = `Эритроциты_E2`) %>%
+  select(contains("визит"))
+
+```
+
+Также можно отсортировать данные по одной или нескольким переменным с помощью функции arrange.
+
+```{r arrange, echo=FALSE}
+data %>%
+  arrange(`Возраст`) 
+
+```
+Добавим столбец "Группа"
+
+```{r add_column_new, echo=FALSE}
+data1 <- tibble(group = rep(c("Группа 1", "Группа 2"), 50))
+data <- data %>% bind_cols(data1)
+
+```
+
+Пример небольшого статистического отчета по категориальным переменным - приводим их к среднему.
+```{r stat, echo=FALSE}
+data %>%
+  select(group, where(is.numeric)) %>%
+  group_by(group) %>%
+  summarize(across(where(is.numeric), function(x) mean(x, na.rm = TRUE)))
+
+```
+
+
