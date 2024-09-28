@@ -1,0 +1,254 @@
+---
+title: "2609_Visualization_hw"
+author: "Ekaterina Vostokova"
+date: "2024-09-26"
+output: html_document
+---
+
+Устанавливаем нужные параметры:
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, error = FALSE, fig.width=16, fig.height=10)
+
+library(tidyverse)
+library(dplyr)
+
+theme_custom <- theme(
+    axis.text = element_text(size = 25),
+    axis.title = element_text(size = 25),
+    legend.title = element_text(size = 25),
+    legend.text = element_text(size = 25)
+  )
+```
+
+Читаем данные:
+```{r dataLoading}
+hogwarts <- read_csv("/Users/ekaterinavostokova/Downloads/dayavis_BI_2024/data/hogwarts.csv")
+hogwarts |> head()
+```
+
+##Раздел 1. Столбчатые диаграммы.
+
+### Задание 1.Барплот распределения числа студентов по курсу обучения.
+
+
+```{r barplot}
+
+ggplot(hogwarts)+
+  geom_bar(aes(x = course), colour = "black", fill = "lightblue")+ 
+  theme_bw()+
+  theme_custom
+
+```
+
+### Задание 2.Барплот распределения студентов по факультету.
+
+```{r barplot_house}
+ggplot(hogwarts)+
+  geom_bar(aes(x = fct_infreq(house), 
+               fill = blood_status), 
+           colour = "black", 
+           position = "fill")+ 
+  scale_x_discrete(name = "house")+
+  theme_bw()+
+  theme_custom
+```
+
+Вывод: на факультете Слизерин нет muggle-born и очень большой процент pure-blood, для остальных факультетов пророрции примерно одинаковые.
+
+### Задание 3.Фильтрация half-blood и график из задания 2
+
+```{r barplot_half_blood}
+hogwarts_filtered <- hogwarts %>% filter(blood_status != "Half-blood")
+
+ggplot(hogwarts_filtered)+
+  geom_bar(aes(x = fct_infreq(house), 
+               fill = blood_status), 
+           colour = "black", 
+           position = "fill")+ 
+  scale_x_discrete(name = "Факультет")+
+  ylab("Доля")+
+  geom_hline(yintercept=0.5, 
+             linetype="dashed",
+             linewidth = 2)+
+  theme_bw()+
+  scale_fill_discrete(
+    labels = c("Muggle-borned" = "Маглорожденные",
+               "Pure-blood" = "Чистокровные"))+
+  theme_custom
+```
+
+##Раздел 2. Боксплоты.
+### Задание 1. Распределение баллов третьей недели по факультетам.
+
+```{r boxplot}
+ggplot(hogwarts)+
+  geom_boxplot(aes(x = fct_reorder(house, `week 3`, .desc = TRUE),
+                   y = `week 3`), 
+               colour = "grey49")+
+  theme_bw()+
+  theme_custom+
+  scale_x_discrete(name = "House")
+```
+
+### Задание 2. Изображение разными цветами по происхождению.
+
+
+```{r boxplot_colored, fig.width=14, fig.height=14}
+ggplot(hogwarts)+
+  geom_boxplot(aes(x = fct_reorder(house, `week 3`, .desc = TRUE),
+                   y = `week 3`, fill = blood_status), 
+               colour = "grey49", notch = TRUE)+
+  theme_bw()+
+  theme_custom+
+  scale_x_discrete(name = "House")
+```
+
+## Задание 3. Добавление джиттер-плота.
+```{r boxplot_jitter}
+ggplot(hogwarts)+
+  geom_boxplot(aes(x = fct_reorder(house, `week 3`, .desc = TRUE),
+                   y = `week 3`, fill = blood_status), 
+               colour = "grey49", notch = TRUE, 
+               outlier.shape = NA, 
+               linewidth = 1.0,
+               width = 0.5)+
+  geom_jitter(aes(x = fct_reorder(house, `week 3`, .desc = TRUE), 
+                  y = `week 3`), width=0.2, alpha=0.5)+
+  scale_x_discrete(name = "House") + 
+  ggtitle("Распределение очков недели 3 по факультетам") + 
+  labs(caption = "по данным Хогвартс")+
+  theme_bw()+
+  theme_custom+
+  theme(plot.title = element_text(size = 25), plot.caption = element_text(size = 15))
+```
+
+## Раздел 3. Разное.
+
+### Задание 1. Пострение "леденцового графика" (lollipop-plot)
+
+```{r lollipot_plot, fig.width=17, fig.height=14}
+hogwarts |>
+  filter(course == 5) |>
+  mutate(id = as.factor(id)) |>
+  ggplot() +
+  geom_segment(aes(y = fct_reorder(id, result), 
+                   yend = fct_reorder(id, result), 
+                   x = 0,
+                   xend = result)) + 
+  geom_point(aes(y = fct_reorder(id, result, .desc = TRUE), 
+                 x = result,
+                 colour = wand),
+             size = 4) +
+  scale_colour_manual(values = c("Dragon heartstring" = "red", 
+                                 "Phoenix feather" = "yellow", 
+                                 "Unicorn hair" = "grey")) +
+  theme_bw() +
+  theme_custom +
+  scale_y_discrete(name = "Student ID") +
+  xlab("Final Score") +
+  ggtitle("Lollipop Plot: Final Scores of 5th Year Students")
+```
+
+### Задание 2. Гистограмма распределения баллов за экзамен по астрономии
+
+```{r hist_astr, fig.width=17, fig.height=14}
+ggplot(hogwarts, aes(x = Astronomy_exam, 
+                 fill = house))+
+  geom_histogram(colour = "black", bins = ceiling(log2(nrow(hogwarts))+1))+
+  scale_fill_manual(values = c("Slytherin" = "green",
+                               "Gryffindor" = "grey",
+                               "Hufflepuff" = "grey",
+                               "Ravenclaw" = "grey"))+
+  theme_bw()+
+  theme(
+    axis.text = element_text(size = 18),
+    axis.title = element_text(size = 22),
+    legend.title = element_text(size = 20),
+    legend.text = element_text(size = 18)
+  )+
+  ylab("Number of students")
+
+```
+
+
+
+
+### Задание 3. Модификация theme_custom
+```{r modif_theme}
+theme_custom_mod <- theme(
+    panel.background = element_rect(fill = "white", colour = "black"),
+    plot.background = element_rect(fill = "white"),
+    panel.grid.major = element_line(colour = "grey", linewidth = 0.25),
+    panel.grid.minor = element_line(colour = "lightgrey", linewidth = 0.1),
+    panel.border = element_rect(colour = "black", fill = NA),
+    axis.text = element_text(size = 20),
+    axis.title = element_text(size = 25),
+    legend.title = element_text(size = 25),
+    legend.text = element_text(size = 20)
+  )
+```
+
+
+Наблюдаем, как работает модицифицированная версия
+``` {r trying_modif, fig.width=18, fig.height=12}
+ggplot(hogwarts)+
+  geom_boxplot(aes(x = fct_reorder(house, `week 3`, .desc = TRUE),
+                   y = `week 3`, fill = blood_status), 
+               colour = "grey49", 
+               outlier.shape = NA, 
+               linewidth = 1.0,
+               width = 0.5)+
+  geom_jitter(aes(x = fct_reorder(house, `week 3`, .desc = TRUE), 
+                  y = `week 3`), width=0.2, alpha=0.5)+
+  theme_custom_mod+
+  scale_x_discrete(name = "House") + 
+  ggtitle("Распределение очков недели 3 по факультетам") + 
+  labs(caption = "по данным Хогвартс")
+  
+```
+
+## Раздел 4. Фасетирование
+
+### Задание 1.
+На мой взгляд, для визулизации гистограмм предпочтительнее разбиение на строки, когда по оси х отображены какие-либо числовые значения, которые остаются общими для всех графиков. В таком случае проще воспринимать различия между распределениями.
+В случае violin-plot наоборот, нагляднее разбивать по столбцам, так как в этих графиках распределение показано по вертикали.
+В общем случае, нужно стараться сохранять одинаковой ту непрерывную ось, которая отражает распределение.
+
+### Задание 2. Гистограмма для результата любого экзамена.
+
+```{r hist_exam_results}
+ggplot(hogwarts)+
+  geom_histogram(aes(x = `Divinations_exam`), 
+                 fill = "turquoise1", 
+                 colour = "grey49", 
+                 bins = ceiling(log2(nrow(hogwarts))+1))+
+  facet_wrap(.~course, nrow = 2) +
+  theme_bw()+
+  theme_custom_mod +
+  theme(
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 18),
+    legend.title = element_text(size = 20),
+    legend.text = element_text(size = 12)
+  )+
+  scale_x_continuous(name = "Divinations exam score") +
+  scale_y_continuous(name = "Number of students") +
+  ggtitle("Distributions of Divinations exam scores by course")
+```
+
+### Задание 3. Распределение плотности вероятности для оценки студентов
+
+```{r prob_dist, fig.width=10, fig.height=7}
+ggplot(hogwarts) +
+  geom_density(aes(x = `Defence against the dark arts_exam`, fill = "Dark Arts"), alpha = 0.5, colour = "blue") +
+  geom_density(aes(x = `Herbology_exam`, fill = "Herbology"), alpha = 0.5, colour = "green") +
+  facet_wrap(~sex) +
+  theme_custom_mod +
+  scale_fill_manual(values = c("Dark Arts" = "blue", "Herbology" = "green")) +  
+  scale_x_continuous(name = "Exam Score") +
+  scale_y_continuous(name = "Density") +
+  ggtitle("Density of Exam Scores for Dark Arts and Herbology by Gender") +
+  labs(caption = "Source: Hogwarts Data")
+
+```
+
