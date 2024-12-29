@@ -1,0 +1,347 @@
+---
+title: "Продвинутая визуализация"
+author: "Ekaterina Vostokova"
+date: "2024-12-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(rstatix)
+library(ggpubr)
+library(ggcorrplot)
+library(pheatmap)
+library(plotly)
+library(umap)
+
+```
+
+### Task 1
+Загрузите датасет very_low_birthweight.RDS  
+Это данные о 671 младенце с очень низкой массой тела (<1600 грамм), собранные в Duke University Medical Center доктором Майклом О’Ши c 1981 по 1987 г.  
+Переменными исхода являются колонки 'dead', а также время от рождения до смерти или выписки (выводятся из 'birth' и 'exit'. 7 пациентов были выписаны до рождения). 
+
+Сделайте копию датасета, в которой удалите колонки с количеством пропусков больше 100, а затем удалите все строки с пропусками. 
+
+```{r input}
+data <- read_rds("./very_low_birthweight.rds")
+data_filtered_100 <- data[, colSums(is.na(data)) <= 100]
+#data_no_na <- data_filtered_100[complete.cases(data_filtered_100),]
+data_no_na <- data_filtered_100 %>% filter(rowSums(is.na(data_filtered_100)) == 0)
+```
+
+### Task 2
+
+Постройте графики плотности распределения для числовых переменных. Удалите выбросы, если таковые имеются. Преобразуйте категориальные переменные в факторы. Для любых двух числовых переменных раскрасьте график по переменной ‘inout’.
+
+2.1 - Выделяем только числовые переменные и строим графики плотности распределения.
+
+```{r scatter}
+numeric_variables_only <- data_no_na[, sapply(data_no_na, is.numeric)]
+
+
+
+for (var in names(numeric_variables_only)) {
+  plot <- ggplot(numeric_variables_only, aes_string(x = var)) +
+    geom_density(fill = "blue", alpha = 0.5) +
+    labs(title = paste("Плотность распределения:", var), x = var) +
+    theme_minimal()
+  
+  print(plot) 
+}
+
+```
+2.2 - удаляем выбросы в количественных переменных
+
+Используя метод IQR, я получила очень строгую фильтрацию (из 531 осталось 232 значения, включая всех dead, что важно далее. Я пробовала использовать менее строгие параметры - 2 или 3 вместо 1.5 при умножении), однако это практически не меняет ситуацию. Тут возможно не исключать строку с outlier полностью, а например заменять на NA, но я решила попробовать другой метод.
+```{r filter}
+data_no_outliers <- data_no_na
+
+for (var in names(numeric_variables_only)) {
+  q1 <- quantile(data_no_outliers[[var]], 0.25, na.rm = TRUE)
+  q3 <- quantile(data_no_outliers[[var]], 0.75, na.rm = TRUE)
+  iqr <- q3 - q1
+  upper <- q3 + 1.5 * iqr
+  lower <- q1 - 1.5 * iqr
+  
+  data_no_outliers <- data_no_outliers %>%
+    filter(data_no_outliers[[var]] >= lower & data_no_outliers[[var]] <= upper)
+}
+
+```
+
+В качестве альтернативы я использовала Z-score и считала outliers только те значения, которые более чем на 3 стандартных отклонения отклоняются от среднего. Тогда из 531 значения дальше проходят 513, что кажется более разумным результатом.
+
+```{r filter_2}
+
+data_no_outliers <- data_no_na 
+
+for (var in names(numeric_variables_only)) {
+  numeric_data <- data_no_outliers[[var]]
+  z_scores <- scale(numeric_data)
+  data_no_outliers <- data_no_outliers %>%
+      filter(abs(z_scores) <= 3)
+}
+
+```
+
+
+2.3 - переводим категориальные переменные в факторы
+
+```{r factor}
+categorical_variables <- sapply(data_no_outliers, is.character)
+data_no_outliers[, categorical_variables] <- lapply(data_no_outliers[, categorical_variables], factor)
+
+data_no_outliers %>% glimpse() %>% head()
+
+```
+2.4 - Визуализация двух числовых переменных с раскраской по inout
+
+```{r inout_color}
+ggplot(data_no_outliers, aes_string(x = "birth", y = "hospstay", color = "inout")) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Визуализация переменных birth, hospstay с раскраской по inout") +
+  theme_minimal()
+```
+
+В целом видим отсутствие различий в зависимости от inout.
+
+### Task 3
+
+Проведите тест на сравнение значений колонки ‘lowph’ между группами в переменной inout. Вид статистического теста определите самостоятельно. Визуализируйте результат через библиотеку 'rstatix'. Как бы вы интерпретировали результат, если бы знали, что более низкое значение lowph ассоциировано с более низкой выживаемостью?
+
+
+Разбив значения lowph согласно переменной inout, видим, что распределения не нормальные, поэтому будем использовать непараметрический тест, в данном случае тест Манна-Уитни (Wilcoxon).
+
+```{r lowph_normality}
+
+ggplot(data_no_outliers, aes(x = lowph)) +
+  geom_histogram(fill = "blue", alpha = 0.5) +
+  facet_wrap(~ inout) +
+  theme_minimal()
+```
+
+```{r lowph_test}
+
+wilcox_test_out <- data_no_outliers %>%
+  wilcox_test(lowph ~ inout) %>%
+  add_significance()
+
+print(wilcox_test_out)
+
+wilcox_test_out <- wilcox_test_out %>%
+  mutate(y.position = max(data_no_outliers$lowph, na.rm = TRUE) * 1.1)
+
+ggboxplot(data_no_outliers, x = "inout", y = "lowph", fill = "inout") +
+  stat_pvalue_manual(wilcox_test_out, label = "p", tip.length = 0.01) +
+  theme_minimal() +
+  labs(
+    title = "Сравнение групп lowph в зависимости от переменной inout"
+  )
+```
+В целом, в группе transported значения ниже, чем в born at Duke. Если более низкое значение lowph ассоциировано с более низкой выживаемостью, то возможно, транспортируют более тяжелых больных, либо же сам процесс транспортировки негативно влияет на параметры пациента.
+
+
+### Task 4
+
+Сделайте новый датафрейм, в котором оставьте только континуальные или ранговые данные, кроме 'birth', 'year' и 'exit'. Сделайте корреляционный анализ этих данных. Постройте два любых типа графиков для визуализации корреляций.
+
+Оставляем континуальные данные и ранговые (apg1) данные, строим корреляционную матрицу.
+
+```{r continuous}
+continuous <- data_no_outliers %>%
+  select(hospstay, lowph, pltct, bwt, gest, apg1)
+cor_matrix <- cor(continuous, method = "pearson", use = "complete.obs")
+ggcorrplot(cor_matrix, hc.order = TRUE, type = "lower", lab = TRUE, lab_size = 3, 
+           title = "Корреляции между различными переменными")
+```
+Визуализируем корреляции 2 способами - диаграмма рассеяния с линией регрессии и heatmap.
+
+```{r corr}
+ggplot(continuous, aes(x = gest, y = bwt)) +
+  geom_point(color = "blue", alpha = 0.6) +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  theme_minimal() +
+  labs(
+    title = "Диаграмма разброса с линией регрессии для переменных с максимальной корреляцией в датасете"
+    
+  )
+
+heatmap(scale(continuous))
+
+```
+
+### Task 5
+
+Постройте иерархическую кластеризацию на этом датафрейме, используя euclidean distances.
+
+```{r hierarchical}
+continuous_scaled <- scale(continuous)
+hierarchical <- hclust(dist(continuous_scaled, method = "euclidean"), method = "ward.D2")
+plot(hierarchical, xlab = "", sub = "", labels = FALSE)
+```
+
+### Task 6
+Сделайте одновременный график heatmap и иерархической кластеризации. Интерпретируйте результат.
+
+Также используем евклидово расстояние.
+```{r pheat}
+pheatmap(cor_matrix, clustering_distance_rows = "euclidean", 
+        clustering_distance_cols = "euclidean", clustering_method = "ward.D2")
+```
+
+Продолжительность пребывания в госпитале обратно корррелирует с остальными показателями. В целом, это можно интерпретировать так, что чем "лучше" показатели, тем меньше требуется находиться в госпитале. Переменные bwt и gest наиболее скоррелированы. Они отражают вес при рождении и срок беременности, так что это вполне естественно. 
+
+### Task 7
+
+Проведите PCA анализ на этих данных. Проинтерпретируйте результат. Нужно ли применять шкалирование для этих данных перед проведением PCA?
+
+```{r pca}
+pca_out <-prcomp(continuous_scaled, center = TRUE, scale. = TRUE)
+summary(pca_out)
+
+summary(pca_out)$importance[2, ] 
+```
+В этом случае применяем шкалирование, так как данные очень разные, имеют разную размерность. Шкалирование поможет нивелировать влияние параметров с большим абсолютным значением.
+
+Смотрим на процент вариации, который объясняют компоненты. Первая объясняет 43%, первые три вместе - около 73%. Первые две являются наиболее важными.
+
+
+### Task 8
+Постройте biplot график для PCA. Раскрасьте его по значению колонки 'dead'.
+
+```{r biplot}
+biplot_graph <- cbind(continuous, pca_out$x)
+
+biplot_graph$dead <- data_no_outliers$dead
+
+ggplot(biplot_graph, aes(x = PC1, y = PC2, color = as.factor(dead))) +
+  geom_point(alpha = 0.5) + 
+  labs(title = "Biplot colored by survival",
+       x = "PC1", y = "PC2") +
+  scale_color_manual(values = c("blue", "red")) + 
+  theme_minimal()
+```
+Не видно различий между выжившими и нет. 
+
+### Task 9
+
+Переведите последний график в 'plotly'. При наведении на точку нужно, чтобы отображалось id пациента.
+
+```{r plotly}
+
+biplot_graph$id <- rownames(biplot_graph)
+ggplot_biplot <- ggplot(biplot_graph, aes(x = PC1, y = PC2, color = as.factor(dead), text = id)) +
+  geom_point(alpha = 0.5) + 
+  labs(title = "Biplot colored by survival",
+       x = "PC1", y = "PC2") +
+  scale_color_manual(values = c("blue", "red")) + 
+  theme_minimal()
+
+plotly_biplot <- ggplotly(ggplot_biplot, tooltip = "text")
+plotly_biplot
+
+```
+
+### Task 10
+
+Дайте содержательную интерпретацию PCA анализу. Почему использовать колонку 'dead' для выводов об ассоциации с выживаемостью некорректно? 
+
+Мы видим, что данные не кластеризуются, PCA не способен в данном случае различать категории выживших и нет. Некорректность выводов по колонке dead может быть связана с тем, что это бинарный показатель и он недостаточно информативен для выводов о выживаемости. Кроме того, мы только знаем, что пациент был жив в какой-то момент времени, но не знаем, что было в дальнейшем. 
+
+
+## Task 11
+
+Приведите ваши данные к размерности в две колонки через UMAP. Сравните результаты отображения точек между алгоритмами PCA и UMAP.
+
+```{r pca_umap}
+
+umap_result <- umap(continuous_scaled, n_neighbors = 10, min_dist = 0.1, metric = "euclidean")
+biplot_graph_umap <- data.frame(UMAP1 = umap_result$layout[, 1], UMAP2 = umap_result$layout[, 2])
+biplot_graph_umap$dead <- data_no_outliers$dead
+biplot_graph_umap$id <- rownames(biplot_graph_umap)
+
+ggplot_biplot_umap <- ggplot(biplot_graph_umap, aes(x = UMAP1, y = UMAP2, color = as.factor(dead), text = id)) +
+  geom_point(alpha = 0.5) + 
+  labs(title = "UMAP Biplot colored by survival",
+       x = "UMAP1", y = "UMAP2") +
+  scale_color_manual(values = c("blue", "red")) + 
+  theme_minimal()
+
+plotly_biplot_umap <- ggplotly(ggplot_biplot_umap, tooltip = "text")
+plotly_biplot_umap
+```
+Как и в случае с PCA, не видим особенных различий между категориями. График выглядит слегка по-другому, имеет несколько другую форму, однако мы не видим закономерностей ни в одном, ни в другом случае.
+
+
+### Task 12
+
+Давайте самостоятельно увидим, что снижение размерности – это группа методов, славящаяся своей неустойчивостью. Измените основные параметры UMAP (n_neighbors и min_dist) и проанализируйте, как это влияет на результаты.
+
+
+```{r umap}
+umap_result <- umap(continuous_scaled, n_neighbors = 50, min_dist = 0.1, metric = "euclidean")
+biplot_graph_umap <- data.frame(UMAP1 = umap_result$layout[, 1], UMAP2 = umap_result$layout[, 2])
+biplot_graph_umap$dead <- data_no_outliers$dead
+biplot_graph_umap$id <- rownames(biplot_graph_umap)
+
+ggplot_biplot_umap <- ggplot(biplot_graph_umap, aes(x = UMAP1, y = UMAP2, color = as.factor(dead), text = id)) +
+  geom_point(alpha = 0.5) + 
+  labs(title = "UMAP Biplot colored by survival",
+       x = "UMAP1", y = "UMAP2") +
+  scale_color_manual(values = c("blue", "red")) + 
+  theme_minimal()
+
+plotly_biplot_umap <- ggplotly(ggplot_biplot_umap, tooltip = "text")
+plotly_biplot_umap
+```
+
+При изменении параметров мы видим, что график меняется. Например, теперь представители категории dead теперь скорее сгруппированы в другой его части. Также будто бы паттерн более крупный.
+
+
+```{r umap_par1}
+umap_result <- umap(continuous_scaled, n_neighbors = 5, min_dist = 0.1, metric = "euclidean")
+biplot_graph_umap <- data.frame(UMAP1 = umap_result$layout[, 1], UMAP2 = umap_result$layout[, 2])
+biplot_graph_umap$dead <- data_no_outliers$dead
+biplot_graph_umap$id <- rownames(biplot_graph_umap)
+
+ggplot_biplot_umap <- ggplot(biplot_graph_umap, aes(x = UMAP1, y = UMAP2, color = as.factor(dead), text = id)) +
+  geom_point(alpha = 0.5) + 
+  labs(title = "UMAP Biplot colored by survival",
+       x = "UMAP1", y = "UMAP2") +
+  scale_color_manual(values = c("blue", "red")) + 
+  theme_minimal()
+
+plotly_biplot_umap <- ggplotly(ggplot_biplot_umap, tooltip = "text")
+plotly_biplot_umap
+```
+
+
+При уменьшении n_neighbors точки становятся ближе друг к другу, возможно получится различать меньшие различия.
+
+
+```{r umap_par2}
+umap_result <- umap(continuous_scaled, n_neighbors = 10, min_dist = 0.5, metric = "euclidean")
+biplot_graph_umap <- data.frame(UMAP1 = umap_result$layout[, 1], UMAP2 = umap_result$layout[, 2])
+biplot_graph_umap$dead <- data_no_outliers$dead
+biplot_graph_umap$id <- rownames(biplot_graph_umap)
+
+ggplot_biplot_umap <- ggplot(biplot_graph_umap, aes(x = UMAP1, y = UMAP2, color = as.factor(dead), text = id)) +
+  geom_point(alpha = 0.5) + 
+  labs(title = "UMAP Biplot colored by survival",
+       x = "UMAP1", y = "UMAP2") +
+  scale_color_manual(values = c("blue", "red")) + 
+  theme_minimal()
+
+plotly_biplot_umap <- ggplotly(ggplot_biplot_umap, tooltip = "text")
+plotly_biplot_umap
+```
+
+При увеличении min_dist как будто бы теряется паттерн, точки более рассеянны.
+
+
+
