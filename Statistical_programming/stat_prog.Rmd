@@ -1,0 +1,122 @@
+---
+title: "stat_prog"
+author: "Ekaterina Vostokova"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+library(openxlsx)
+library(dplyr)
+
+```
+
+```{r import}
+adsl = read_xlsx('./ADaM-like/ADSL.xlsx')
+
+mh = read_xlsx("./SDTM/MH_MEDICALHISTORY.xlsx")
+```
+
+
+
+```{r clean_adsl_mh}
+adsl_ds <- adsl %>%
+  select(STUDYID, USUBJID, SUBJID, TRTP, TRTPN) %>%
+  mutate(
+    STUDYID = as.character(STUDYID),
+    SUBJID = as.character(SUBJID),
+    USUBJID = as.character(USUBJID),
+    TRTP = as.character(TRTP),
+    TRTPN = as.integer(TRTPN)
+  )
+
+mh_ds <- mh %>%
+  filter(MHCAT == "Medical History") %>%
+  filter(!str_detect(SUBJID, "^XXXX")) %>%  
+  select(SUBJID, MHSEQ, MHCAT, MHTERM, MHDECOD, MHBODSYS) %>%
+  filter(!is.na(MHTERM) | (SUBJID == "005009" & MHSEQ == 1))
+```
+
+
+```{r dates}
+st_dates_ds <- mh %>%
+  filter(MHCAT == "Medical History" & (!is.na(MHTERM) | (SUBJID == "005009" & MHSEQ == 1))) %>%
+  select(SUBJID, MHCAT, MHSEQ, MHSTDTC) %>%
+  mutate(
+    ASTDT = if_else(
+      str_detect(MHSTDTC, "^\\d{4}-\\d{2}$"),
+      paste0(MHSTDTC, "-01"),
+      if_else(
+        str_detect(MHSTDTC, "^\\d{4}$"),
+        paste0(MHSTDTC, "-01-01"),
+        MHSTDTC
+      )
+    ),
+    ASTDT = format(as.Date(ASTDT, format = "%Y-%m-%d"), "%d.%m.%Y"),
+    ASTDTF = case_when(
+      is.na(MHSTDTC) ~ "Y",
+      str_detect(MHSTDTC, "^\\d{4}$") ~ "Y",
+      str_detect(MHSTDTC, "^\\d{4}-\\d{2}$") ~ "D",
+      str_detect(MHSTDTC, "^\\d{4}-\\d{2}-\\d{2}$") ~ "",
+      TRUE ~ NA_character_
+    )
+  )
+
+end_dates_ds <- mh %>%
+  filter(MHCAT == "Medical History" & (!is.na(MHTERM) | (SUBJID == "005009" & MHSEQ == 1))) %>%
+  select(SUBJID, MHSEQ, MHCAT, MHENDTC, MHENRTPT, MHENTPT) %>%
+  filter(MHENRTPT != "U" | (SUBJID == "005009" & MHSEQ == 1)) %>%
+  mutate(
+    AENDT = if_else(MHENRTPT == "ONGOING", "",
+      if_else(
+        is.na(MHENDTC), "",
+        if_else(
+          str_detect(MHENDTC, "^\\d{4}-\\d{2}$"),
+          paste0(MHENDTC, "-01"),
+          if_else(
+            str_detect(MHENDTC, "^\\d{4}$"),
+            paste0(MHENDTC, "-01-01"),
+            MHENDTC
+          )
+        )
+      )
+    ),
+    AENDT = if_else(AENDT != "",
+                    format(as.Date(AENDT, format = "%Y-%m-%d"), "%d.%m.%Y"),
+                    ""),
+    AENDTF = case_when(
+      is.na(AENDT) ~ "Y",
+      AENDT == "" ~ "Y",
+      str_detect(AENDT, "^\\d{4}$") ~ "Y",
+      str_detect(AENDT, "^\\d{4}-\\d{2}$") ~ "D",
+      str_detect(AENDT, "^\\d{4}-\\d{2}-\\d{2}$") ~ "",
+      TRUE ~ NA_character_
+    ),
+    MHENRF = if_else(MHENRTPT == "ONGOING", "ONGOING", "")
+  )
+```
+
+
+```{r join}
+ADMH <- adsl_ds %>%
+  left_join(mh_ds, by = "SUBJID") %>%
+  left_join(st_dates_ds, by = c("SUBJID", "MHSEQ")) %>%
+  left_join(end_dates_ds, by = c("SUBJID", "MHSEQ"))
+
+ADMH <- ADMH %>%
+  filter(str_detect(MHENRTPT, "ONGOING"))  
+
+ADMH <- ADMH %>%
+  select(
+    STUDYID, USUBJID, TRTP, TRTPN, MHSEQ, MHCAT, MHTERM, MHDECOD,
+    MHBODSYS, MHSTDTC, ASTDT, ASTDTF, MHENDTC, AENDT, AENDTF, MHENRTPT, MHENRF
+  ) %>%
+  mutate(MHSEQ = as.integer(MHSEQ)) 
+
+write.xlsx(ADMH, "ADMH.xlsx")
+
+```
+
+
