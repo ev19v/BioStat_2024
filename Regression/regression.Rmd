@@ -1,0 +1,214 @@
+---
+title: "Применение регрессии"
+author: "Ekaterina Vostokova"
+date: "2025-01-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, error = FALSE)
+options(ggally.noProgress = TRUE)
+options(ggplot2.discrete.fill = FALSE)
+suppressMessages({
+  library(readxl)
+  library(tidyverse)
+  library(dplyr)
+  library(forcats)
+  library(GGally)
+  library(gtsummary)
+  library(broom)
+  library(car)
+  library(lmtest)
+  library(sandwich)
+  library(ggplot2)
+  library(ggResidpanel)
+  library(flextable)
+})
+
+```
+
+Основная цель задания - оценить общий (total) эффект физической активности в отношении гликированного гемоглобина (Hb1Ac).
+
+
+
+## Вопрос 1. Оценка физической активности
+Каким образом вы будете оценивать физическую активность респондентов? Есть ли у вас предварительные предположения относительно того, каким образом выбранный вами пока- затель может быть ассоциирован с гликированным гемоглобином?
+
+```{r read_data}
+data = read_xlsx("HW_data.xlsx")
+```
+
+В датасете есть ряд переменных, характеризующих физическую активность, таких как PAQ605 (интенсивная физическая активность), PAQ610 (количество дней интенсивной активности), PAD615(количество минут интенсивной активности), а также PAQ620, PAQ625, PAD630 - аналогично для активности средней интенсивности. Также есть переменные, характеризующие образ жизни, например катание на велосипеде или активный отдых.
+
+В качестве оценки можно использовать время за неделю, потраченное на физическую активность, причем более интенсивная активность будет учитываться с более высоким коэффициентом. 
+
+Следовательно, активность будет иметь вид 
+PAQ610 * PAD615 + PAQ640 * PAD645 + PAQ655 * PAD660 + 0.5 * (PAQ625 * PAD630 + PAQ670 * PAD675)
+
+Предварительное ожидание - что существует ассоциация между достаточной физической активностью и снижением гликированного гемоглобина. Это предположение может быть выдвинуто через данные из физиологии, которые через уровень глюкозы предполагают подобную взаимосвязь.
+
+
+## Вопрос 2. 
+Ковариаты для каких показателей вы включите в модель для коррекции эффекта физической активности в отношении гликированного гемоглобина? Каким образом вы будете их оценивать по имеющимся данным?
+
+Для начала стоит обратить внимание на переменные расы (RIDRETH3), пола (RIAGENDR), возраста (RIDAGEYR), курения (SMQ040) и сопутствующих заболеваний. Также это может быть образование (DMDEDUC2), доход (INDFMIN2). Сопутствующие заболевания включают в себя астму (MCQ010, MCQ035), ХОБЛ (MCQ160O), онкологию (MCQ220), заболевания щитовидной железы (MCQ160m, MCQ170m), проблемы с сердечно-сосудистой системой (MCQ160B, MCQ160C, MCQ160E, MCQ160F)
+
+
+## Вопрос 3.
+Проведите необходимый эксплораторный анализ перед оценкой модели.
+
+Для начала приведем данные к более читаемому виду, переведем все категориальные переменные в факторы.
+```{r cleaned}
+cleaned_data <- data %>% 
+  transmute(
+    ID = SEQN,
+    Glycohemoglobin = LBXGH,
+    Age = RIDAGEYR,
+    Sex = factor(RIAGENDR, labels = c("Male", "Female")),
+    Race = factor(RIDRETH3, labels = c("Mexican American", "Other Hispanic", "Non-Hispanic White", "Non-Hispanic Black", "Non-Hispanic Asian", "Other")),
+    Family_income = factor(INDFMIN2, labels = c("$0-$4,999", "$5,000-$9,999", "$10,000-$14,999", "$15,000-$19,999", "$20,000-$24,999", "$25,000-$34,999", "$35,000-$44,999", "$45,000-$54,999", "$55,000-$64,999", "$65,000-$74,999", "$75,000-$99,999", "$100,000 and Over")),
+    Education = factor(DMDEDUC2, labels = c("Less than 9th grade", "9-11th grade", "High school graduate", "College or AA degree", "College graduate")),
+    BMI = BMXBMI,
+    Smoking = factor(ifelse(SMQ020 == 2, "Never", SMQ040), labels = c("Every day", "Some days", "Not at all", "Never")),
+    Activity = round((PAQ610 * PAD615 + PAQ640 * PAD645 + PAQ655 * PAD660 + 0.5 * (PAQ625 * PAD630 + PAQ670 * PAD675)) / 7, 2),
+    PAC = factor(ifelse(Activity >= 150, "Normal", "Low"), levels = c("Low", "Normal")),
+    Asthma = factor(ifelse(MCQ010 == 2, "No", MCQ035), labels = c("Current", "In history", "No")),
+    Thyroid_problem = factor(ifelse(MCQ160M == 2, "No", MCQ170M), labels = c("Current", "In history", "No")),
+    Cardiovascular_diseases = factor(ifelse(MCQ160C == 1 | MCQ160B == 1 | MCQ160E == 1 | MCQ160F == 1, "Yes", "No")),
+    COPD = factor(MCQ160O, labels = c("No", "Yes")),
+    Cancer = factor(MCQ220, labels = c("No", "Yes")),
+    Diabetes = factor(DIQ010, labels = c("No", "Yes"))
+  )
+
+```
+
+Теперь посмотрим на описательные статистики:
+```{r summary}
+
+tbl_summary(
+  cleaned_data, 
+  type = list(all_continuous() ~ "continuous2"),
+  statistic = list(
+    all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}-{p75})", "{min}-{max}")
+  )
+) %>%
+  modify_footnote(everything() ~ NA) %>%
+  bold_labels()
+```
+
+И проведем эксплораторный анализ. 
+```{r explore, progress=FALSE}
+suppressWarnings({ggpairs(
+  cleaned_data %>% select(Glycohemoglobin, Age, Activity, BMI, PAC), 
+  upper = list(continuous = wrap("points", alpha = 0.5, size = 1)),
+  lower = list(continuous = "cor", combo = wrap("box_no_facet", outlier.size = 0.5)),
+  diag = list(continuous = "barDiag"),
+  showStrips = TRUE
+) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(fill = "#EFEBE9")
+  )})
+
+```
+Здесь мы не видим корреляции между уровнем гликированного гемоглобина и активностью.
+
+## Вопрос 4.
+Оцените модель для зависимости гликированного гемоглобина от выбранного вами показателя физической активности без ковариат и с ними. Проведите необходимую диагностику этих моделей -- требует ли что-либо коррекции и почему? В случае необходимости коррекции по результатам диагностики сделайте ее.
+
+Модель без ковариат 
+```{r no_cov}
+no_covariates <- lm(Glycohemoglobin ~ Activity, cleaned_data)
+
+summary(no_covariates)
+
+tidy(no_covariates, conf.int = TRUE)
+par(mfrow = c(2, 2))
+plot(no_covariates)
+```
+На графиках мы можем наблюдать ряд фактов. 
+Распределение остатков ненормально (график Q-Q Residuals). Наблюдаем гетероскедастичность (Scale-Location). Видим возможные выбросы (Residuals vs Leverage).
+
+Пробуем скорректировать модель:
+```{r correct}
+results_no_cov <- coeftest(no_covariates, vcov. = vcovHC, type = "HC1")
+tidy(results_no_cov, conf.int = TRUE) %>%
+  mutate(across(where(is.numeric), round, 6)) %>%
+  flextable()
+```
+Аналогично обрабатываем модель с ковариатами:
+```{r cov}
+
+model_with_cov <- lm(Glycohemoglobin ~ Activity + Race + Sex + Smoking + Cardiovascular_diseases + Diabetes, cleaned_data)
+summary(model_with_cov)
+
+tidy(model_with_cov, conf.int = TRUE)
+par(mfrow = c(2, 2))
+plot(model_with_cov)
+
+results_with_cov <- coeftest(model_with_cov, vcov. = vcovHC, type = "HC1")
+tidy(results_with_cov, conf.int = TRUE) %>%
+  mutate(across(where(is.numeric), round, 6)) %>%
+  flextable()
+```
+Также можем наблюдать выбросы, отклонение остатков от нормальности, гетероскедастичность. Проводим аналогичные поправки.
+
+
+## Вопрос 5. 
+Представьте результаты оценки модели без ковариат и с ковариатами в виде точечной и интервальной оценки эффекта физической активности. Дайте им словесную интерпретацию. Какие выводы мы можем сделать, исходя из точечной оценки? А из интервальной? Как вы думаете, можно ли считать эффект клинически значимым? 
+
+Для модели без ковариат получаем Intercept = 5.8.
+Точечная оценка активности равна -0.000130, то есть при увеличении физической активности изменеие уровня гликированного гемоглобина меняется незначительно. Интервальная оценка - от -0.001110 до 0.000851, интервал включает 0, соответственно эффект не имеет статистической значимости.
+В модели с ковариатами Intercept = 7.21, точечный эффект активности 0.000444, интервальная оценка от -0.000263 до 0.001152. Это аналогично результатам модели без ковариат. 
+
+
+## Вопрос 6.
+Проверьте гипотезу об отсутствии ассоциации между физической активностью и гликированным гемоглобином. Сделайте выводы по полученным результатам.
+
+```{r association}
+
+hyp_test_no_cov <- car::linearHypothesis(
+  no_covariates,
+  names(coef(no_covariates))[grepl("Activity", names(coef(no_covariates)))],
+  vcov. = vcovHC(no_covariates, type = "HC1")
+)
+print(hyp_test_no_cov)
+
+hyp_test_with_cov <- car::linearHypothesis(
+  model_with_cov,
+  names(coef(model_with_cov))[grepl("Activity", names(coef(model_with_cov)))],
+  vcov. = vcovHC(model_with_cov, type = "HC1")
+)
+print(hyp_test_with_cov)
+
+```
+
+Для обеих моделей p-value > 0, поэтому не можем отвергнуть нулевую гипотезу об отсутствии ассоциации.
+
+
+## Вопрос 7. 
+Является ли пол модификатором эффекта физической активности в отношении гликированного гемоглобина? Если да, каков эффект для мужчин и женщин и насколько он отличается между ними?
+
+```{r sex}
+model_sex_mod <- lm(
+  Glycohemoglobin ~ Activity * Sex + Race + Smoking + Cardiovascular_diseases + Diabetes,
+  cleaned_data
+)
+
+# Коррекция гетероскедастичности для модели с взаимодействием
+results_sex_mod <- coeftest(model_sex_mod, vcov. = vcovHC, type = "HC1")
+tidy(results_sex_mod, conf.int = TRUE) %>%
+  mutate(across(where(is.numeric), round, 6)) %>%
+  flextable()
+```
+По полученным данным не можем отвергнуть нулевую гипотезу об отсутствии различий по половому признаку. 
+
+
+## Вопрос 8
+Соответствуют ли полученные вами результаты вашему исходному предположению?Как меняется оценка эффекта физической активности при добавлении ковариат в модель и почему?
+
+
+Эффект физической активности на уровень гликированного гемоглобина не является статистически значимым ни в одной из моделей. Пол также не модифицирует эффект физической активности. Это противоречит исходным ожиданиям.
+
